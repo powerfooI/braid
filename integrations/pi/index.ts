@@ -10,7 +10,8 @@ import {
 import type { BraidInput, GraphUpdate, NodeResult } from "@chrok/braid";
 import { Text } from "@earendil-works/pi-tui";
 import { BraidJobs, type JobSnapshot } from "./jobs.js";
-import { registerBraidCommand } from "./command.js";
+import { registerBraidCommand, registerBraidWidget } from "./command.js";
+import { registerReviewCommand } from "./review.js";
 import { renderGraphCall, renderGraphResult, renderNodeResult } from "./display.js";
 
 const text = (description?: string) => Type.String({ minLength: 1, pattern: "\\S", ...(description ? { description } : {}) });
@@ -270,7 +271,9 @@ export function createBraidTools(jobs: BraidJobs) {
       const selectedNode = job.selectedNode ?? (executionId
         ? state && Object.hasOwn(state.executions, executionId) ? state.executions[executionId] : undefined
         : nodeId && state && Object.hasOwn(state.nodes, nodeId) ? state.nodes[nodeId] : undefined);
-      if (selectedNode) return renderNodeResult(selectedNode, options.expanded, theme, job.nodeOutputPath);
+      // Render at the read's observation time so a saved result never keeps counting.
+      if (selectedNode) return renderNodeResult(selectedNode, options.expanded, theme, job.nodeOutputPath,
+        job.live.progress?.[selectedNode.id], job.live.observedAt);
       if (executionId || nodeId) return new Text(fallback || "Braid returned no node details", 0, 0);
       if (job.error)
         return new Text(
@@ -476,6 +479,8 @@ export default function braidExtension(pi: ExtensionAPI) {
   });
   const { braidTool, statusTool, cancelTool, updateTool, resumeTool } = createBraidTools(jobs);
   registerBraidCommand(pi, jobs);
+  const disposeWidget = registerBraidWidget(pi, jobs);
+  registerReviewCommand(pi, jobs);
   pi.registerTool(braidTool);
   pi.registerTool(statusTool);
   pi.registerTool(cancelTool);
@@ -484,6 +489,7 @@ export default function braidExtension(pi: ExtensionAPI) {
   pi.on("session_shutdown", () => {
     pending.clear();
     jobs.dispose();
+    disposeWidget();
   });
   pi.on("before_agent_start", (event) => ({
     systemPrompt: `${event.systemPrompt}\n\n## Braid execution policy\n${BRAID_USAGE_GUIDANCE}\n\nFor the current user request, make this delegation choice before using read, grep, find, edit, write, or bash. Completion reminders refer to existing jobs: retrieve their results instead of submitting the same graph again.`,

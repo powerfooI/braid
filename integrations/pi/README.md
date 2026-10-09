@@ -25,6 +25,7 @@ It registers:
 - `braid_update` / `braid_resume` — edit live definitions or release paused executions.
 - `braid_cancel` — cancel a job with `{ "jobId": "..." }`.
 - `/braid [jobId]` — open a live flow panel in interactive Pi.
+- `/braid:review [target or focus]` — run a bounded parallel review/fix loop.
 
 Submission and completion reminders use short session handles such as `job-1`.
 Status, cancellation and the panel accept either that exact handle or the original
@@ -49,6 +50,44 @@ Jobs live in memory for the current Pi session. Quitting, reloading extensions,
 or switching/forking sessions aborts outstanding work and suppresses its
 reminders. Job IDs cannot be retrieved after that lifecycle ends. They are not
 persistent processes outside Pi.
+
+## Review command
+
+Run `/braid:review` to review current uncommitted changes (including staged, unstaged,
+and non-ignored new files). With no uncommitted changes, it reviews the latest
+commit. Supply a file, commit range, or focus with `/braid:review src/runtime.ts` or
+`/braid:review main..HEAD, focus on cancellation`. Workers inspect the supplied target
+with local tools; they report unavailable remote targets instead of inventing
+their contents. Use `/braid:review review-only, src/runtime.ts` to request findings
+without fixes.
+
+Each round assigns three independent, read-only reviewers distinct angles based
+on the change. Findings need concrete evidence and file/line references, with
+P0/P1/P2 priority and a merge verdict. One writer synthesizes the feedback and
+fixes only evidenced, in-scope P0/P1 problems in an isolated worktree, then runs
+focused validation. Optional P2 polish is reported. A product, scope, or
+architecture decision stops the loop for user input.
+
+The graph enforces a fixed maximum of **three review rounds**, including the
+first, and **two fix passes**. The final round reports remaining issues without
+making further edits; reaching the cap does not mean the review is clean.
+Only fixes that passed re-review and validation are integrated into the invoking
+checkout, preserving existing user changes. Conflicting concurrent edits or
+failed validation leave the fix checkpoint archived for recovery. Outside Git,
+workers can only inspect files and report findings.
+
+The command returns immediately with a job handle. Use `/braid [jobId]` to see
+progress, `braid_status` for results, and `braid_cancel` to stop. The existing
+completion reminder resumes the parent to report rounds, applied fixes,
+validation, remaining findings, and the stop reason. Session shutdown cancels
+the job. Cancellation or failure during integration can leave partial checkout
+changes; Braid retains backup and checkpoint refs for recovery.
+
+The review policy is adapted from pi-subagents'
+[review-loop](https://github.com/nicobailon/pi-subagents/blob/main/prompts/review-loop.md)
+and [parallel-review](https://github.com/nicobailon/pi-subagents/blob/main/prompts/parallel-review.md)
+prompts. Invoking `/braid:review` authorizes the narrow fix passes described above;
+an explicit review-only request disables them.
 
 ## Graph definitions
 
@@ -163,6 +202,21 @@ scheduler persistence across Pi reloads. Reminders alone do not pause execution.
 
 ## Live flow panel
 
+In interactive Pi, background progress appears automatically **above the input
+editor** as soon as a job is submitted; no command or polling is needed:
+
+```text
+Braid job-1 · running · 2/5 done · review
+```
+
+The widget shows node progress, active node IDs, paused gates, and failures.
+It shows up to three active jobs, with an overflow count for the rest. When no
+jobs are active, the newest job's final completed/failed/cancelled status stays
+visible until another job is submitted or the session ends. Counts use the
+latest state of each current node definition; failed and skipped nodes count as
+done, and reruns or live edits can change progress and totals. RPC, JSON, and
+print modes do not create a terminal widget.
+
 Run `/braid` to open the newest job, or `/braid <jobId>` to open a specific job.
 The bordered panel keeps the job header and keyboard controls visible while
 you scroll the flow and event log. It refreshes as nodes start, finish, fail,
@@ -170,6 +224,13 @@ and pass outputs downstream.
 Use Left/Right to select jobs, Up/Down or Page Up/Page Down to scroll, `c` to
 cancel the selected job, and Escape or `q` to close the panel. Closing the panel
 leaves jobs running. In RPC or noninteractive modes, use `braid_status`.
+
+Run `/braid <jobId> <nodeId>` to open the panel on one node's latest invocation,
+or `/braid <jobId> <executionId>` for an exact invocation such as an earlier loop
+iteration. The node view refreshes live with its status, model, elapsed time,
+token usage, context size, tool-call count, workspace, and full output or error.
+Press Backspace to return to the whole graph; switching jobs also returns to it.
+Tab completes job handles and then that job's node IDs.
 
 The panel renders a Mermaid flowchart, node states, elapsed times, context-token
 estimates or provider-reported usage, context-window sizes, filesystem tool-call
